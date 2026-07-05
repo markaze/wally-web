@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wally - Mapa dos Dispositivos</title>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  >
+  <style>
+    :root {
+      color-scheme: light;
+      --panel: rgba(255, 255, 255, 0.94);
+      --text: #182026;
+      --muted: #5e6a71;
+      --border: #d8dee3;
+      --accent: #0b6bcb;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--text);
+      background: #eef2f4;
+    }
+
+    #map {
+      position: fixed;
+      inset: 0;
+    }
+
+    .panel {
+      position: fixed;
+      z-index: 1000;
+      top: 16px;
+      left: 16px;
+      width: min(390px, calc(100vw - 32px));
+      max-height: calc(100vh - 32px);
+      overflow: auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 10px 35px rgba(12, 23, 31, 0.18);
+      padding: 14px;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .status {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    button {
+      min-height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      background: var(--accent);
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: white;
+      color: var(--accent);
+    }
+
+    .device-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .device {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: white;
+      padding: 10px;
+      cursor: pointer;
+    }
+
+    .device strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 15px;
+    }
+
+    .device span {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <main class="panel">
+    <h1>Wally</h1>
+    <p id="status" class="status">Carregando dispositivos...</p>
+    <div class="actions">
+      <button id="refresh">Atualizar</button>
+      <button id="fit" class="secondary">Ver todos</button>
+    </div>
+    <section id="devices" class="device-list"></section>
+  </main>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  ></script>
+  <script>
+    const SUPABASE_URL = "https://drpqzkqzfdxodnhwwtga.supabase.co/rest/v1";
+    const SUPABASE_KEY = "sb_publishable_nFCVFlLrzUu_jwBpgwEiEg_BAVe3Zlf";
+    const REFRESH_MS = 30000;
+
+    if (!window.L) {
+      document.getElementById("status").textContent =
+        "Leaflet nao carregou. Verifique a conexao com unpkg.com.";
+      throw new Error("Leaflet not loaded");
+    }
+
+    const map = L.map("map", { zoomControl: true }).setView([-23.5505, -46.6333], 11);
+
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const statusEl = document.getElementById("status");
+    const devicesEl = document.getElementById("devices");
+    const refreshButton = document.getElementById("refresh");
+    const fitButton = document.getElementById("fit");
+    const markers = new Map();
+
+    function displayName(device) {
+      return device.device_name || device.device_id.slice(0, 8);
+    }
+
+    function formatDate(value) {
+      if (!value) return "sem horario";
+      return new Intl.DateTimeFormat("pt-BR", {
+        dateStyle: "short",
+        timeStyle: "medium"
+      }).format(new Date(value));
+    }
+
+    function latestByDevice(rows) {
+      const byDevice = new Map();
+      for (const row of rows) {
+        if (!row.device_id || byDevice.has(row.device_id)) continue;
+        byDevice.set(row.device_id, row);
+      }
+      return [...byDevice.values()];
+    }
+
+    async function loadDevices() {
+      statusEl.textContent = "Atualizando dispositivos...";
+      const params = new URLSearchParams({
+        select: "device_id,device_name,latitude,longitude,accuracy,recorded_at,provider",
+        order: "recorded_at.desc",
+        limit: "500"
+      });
+
+      const response = await fetch(`${SUPABASE_URL}/locations?${params}`, {
+        headers: {
+          apikey: SUPABASE_KEY,
+          Authorization: `Bearer ${SUPABASE_KEY}`
+        }
+      });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `HTTP ${response.status}`);
+      }
+
+      return latestByDevice(await response.json());
+    }
+
+    function renderDevices(devices) {
+      devicesEl.replaceChildren();
+
+      for (const [deviceId, marker] of markers) {
+        if (!devices.some((device) => device.device_id === deviceId)) {
+          marker.remove();
+          markers.delete(deviceId);
+        }
+      }
+
+      for (const device of devices) {
+        const point = [device.latitude, device.longitude];
+        const name = displayName(device);
+        const popup = `
+          <strong>${name}</strong><br>
+          ${device.latitude}, ${device.longitude}<br>
+          Precisao: ${device.accuracy ?? "-"}m<br>
+          Horario: ${formatDate(device.recorded_at)}
+        `;
+
+        let marker = markers.get(device.device_id);
+        if (!marker) {
+          marker = L.marker(point).addTo(map);
+          markers.set(device.device_id, marker);
+        }
+
+        marker.setLatLng(point).bindPopup(popup);
+
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "device";
+        item.innerHTML = `
+          <strong>${name}</strong>
+          <span>${device.device_id}</span>
+          <span>${device.latitude}, ${device.longitude}</span>
+          <span>${formatDate(device.recorded_at)}</span>
+        `;
+        item.addEventListener("click", () => {
+          map.setView(point, 16);
+          marker.openPopup();
+        });
+        devicesEl.appendChild(item);
+      }
+
+      statusEl.textContent = devices.length
+        ? `${devices.length} dispositivo(s) encontrado(s). Atualiza a cada 30s.`
+        : "Nenhum dispositivo encontrado.";
+
+      fitAll();
+      setTimeout(() => map.invalidateSize(), 100);
+    }
+
+    function fitAll() {
+      const allMarkers = [...markers.values()];
+      if (!allMarkers.length) return;
+      const group = L.featureGroup(allMarkers);
+      map.fitBounds(group.getBounds().pad(0.18), { maxZoom: 16 });
+    }
+
+    async function refresh() {
+      try {
+        renderDevices(await loadDevices());
+      } catch (error) {
+        statusEl.textContent = "Nao foi possivel carregar o Supabase. Verifique a policy de SELECT.";
+        console.error(error);
+      }
+    }
+
+    refreshButton.addEventListener("click", refresh);
+    fitButton.addEventListener("click", fitAll);
+
+    window.addEventListener("resize", () => map.invalidateSize());
+    setTimeout(() => map.invalidateSize(), 250);
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+  </script>
+</body>
+</html>
