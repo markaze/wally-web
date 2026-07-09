@@ -219,13 +219,19 @@
       return Date.now() - new Date(value).getTime() <= ACTIVE_WINDOW_MS;
     }
 
-    function latestByDevice(rows) {
-      const byDevice = new Map();
+    function deviceKey(device) {
+      const name = (device.device_name || "").trim();
+      return name ? `name:${name.toLowerCase()}` : `id:${device.device_id}`;
+    }
+
+    function latestByName(rows) {
+      const byName = new Map();
       for (const row of rows) {
-        if (!row.device_id || byDevice.has(row.device_id)) continue;
-        byDevice.set(row.device_id, row);
+        const key = deviceKey(row);
+        if (!row.device_id || byName.has(key)) continue;
+        byName.set(key, row);
       }
-      return [...byDevice.values()];
+      return [...byName.values()];
     }
 
     async function loadDevices() {
@@ -248,7 +254,7 @@
         throw new Error(message || `HTTP ${response.status}`);
       }
 
-      return latestByDevice(await response.json());
+      return latestByName(await response.json());
     }
 
     function renderDevices(allDevices) {
@@ -257,10 +263,10 @@
         : allDevices.filter((device) => isActive(device.recorded_at));
       devicesEl.replaceChildren();
 
-      for (const [deviceId, marker] of markers) {
-        if (!devices.some((device) => device.device_id === deviceId)) {
+      for (const [key, marker] of markers) {
+        if (!devices.some((device) => deviceKey(device) === key)) {
           marker.remove();
-          markers.delete(deviceId);
+          markers.delete(key);
         }
       }
 
@@ -275,10 +281,11 @@
           Horario: ${formatDate(device.recorded_at)}
         `;
 
-        let marker = markers.get(device.device_id);
+        const key = deviceKey(device);
+        let marker = markers.get(key);
         if (!marker) {
           marker = L.marker(point).addTo(map);
-          markers.set(device.device_id, marker);
+          markers.set(key, marker);
         }
 
         marker.setLatLng(point).bindPopup(popup);
@@ -303,10 +310,10 @@
       }
 
       statusEl.textContent = devices.length
-        ? `${devices.length} ativo(s) de ${allDevices.length} dispositivo(s). Atualiza a cada 30s.`
+        ? `${devices.length} ativo(s) de ${allDevices.length} nome(s). Atualiza a cada 30s.`
         : allDevices.length
-          ? `${allDevices.length} dispositivo(s) inativo(s). Toque em Mostrar inativos.`
-          : "Nenhum dispositivo encontrado.";
+          ? `${allDevices.length} nome(s) inativo(s). Toque em Mostrar inativos.`
+          : "Nenhum nome encontrado.";
 
       fitAll();
       setTimeout(() => map.invalidateSize(), 100);
