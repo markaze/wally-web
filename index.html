@@ -78,6 +78,7 @@
 
     .actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       margin-bottom: 12px;
     }
@@ -149,6 +150,7 @@
     <div class="actions">
       <button id="refresh">Atualizar</button>
       <button id="fit" class="secondary">Ver todos</button>
+      <button id="toggle-inactive" class="secondary">Mostrar inativos</button>
     </div>
     <section id="devices" class="device-list"></section>
   </main>
@@ -160,6 +162,7 @@
     const SUPABASE_URL = "https://drpqzkqzfdxodnhwwtga.supabase.co/rest/v1";
     const SUPABASE_KEY = "sb_publishable_nFCVFlLrzUu_jwBpgwEiEg_BAVe3Zlf";
     const REFRESH_MS = 30000;
+    const ACTIVE_WINDOW_MS = 15 * 60 * 1000;
 
     if (!window.L) {
       document.getElementById("status").textContent =
@@ -178,9 +181,11 @@
     const devicesEl = document.getElementById("devices");
     const refreshButton = document.getElementById("refresh");
     const fitButton = document.getElementById("fit");
+    const toggleInactiveButton = document.getElementById("toggle-inactive");
     const panelEl = document.querySelector(".panel");
     const togglePanelButton = document.getElementById("toggle-panel");
     const markers = new Map();
+    let showInactive = false;
 
     function displayName(device) {
       return device.device_name || device.device_id.slice(0, 8);
@@ -207,6 +212,11 @@
     function isFresh(value) {
       if (!value) return false;
       return Date.now() - new Date(value).getTime() <= 2 * REFRESH_MS;
+    }
+
+    function isActive(value) {
+      if (!value) return false;
+      return Date.now() - new Date(value).getTime() <= ACTIVE_WINDOW_MS;
     }
 
     function latestByDevice(rows) {
@@ -241,7 +251,10 @@
       return latestByDevice(await response.json());
     }
 
-    function renderDevices(devices) {
+    function renderDevices(allDevices) {
+      const devices = showInactive
+        ? allDevices
+        : allDevices.filter((device) => isActive(device.recorded_at));
       devicesEl.replaceChildren();
 
       for (const [deviceId, marker] of markers) {
@@ -290,8 +303,10 @@
       }
 
       statusEl.textContent = devices.length
-        ? `${devices.length} dispositivo(s) encontrado(s). Atualiza a cada 30s.`
-        : "Nenhum dispositivo encontrado.";
+        ? `${devices.length} ativo(s) de ${allDevices.length} dispositivo(s). Atualiza a cada 30s.`
+        : allDevices.length
+          ? `${allDevices.length} dispositivo(s) inativo(s). Toque em Mostrar inativos.`
+          : "Nenhum dispositivo encontrado.";
 
       fitAll();
       setTimeout(() => map.invalidateSize(), 100);
@@ -315,6 +330,11 @@
 
     refreshButton.addEventListener("click", refresh);
     fitButton.addEventListener("click", fitAll);
+    toggleInactiveButton.addEventListener("click", () => {
+      showInactive = !showInactive;
+      toggleInactiveButton.textContent = showInactive ? "Ocultar inativos" : "Mostrar inativos";
+      refresh();
+    });
     togglePanelButton.addEventListener("click", () => {
       const isHidden = panelEl.classList.toggle("hidden");
       togglePanelButton.textContent = isHidden ? "Mostrar lista" : "Esconder lista";
