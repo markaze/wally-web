@@ -49,6 +49,20 @@
       padding: 14px;
     }
 
+    .panel.hidden {
+      display: none;
+    }
+
+    .toggle-panel {
+      position: fixed;
+      z-index: 1001;
+      top: 16px;
+      right: 16px;
+      min-width: 42px;
+      padding: 0 12px;
+      box-shadow: 0 8px 25px rgba(12, 23, 31, 0.2);
+    }
+
     h1 {
       margin: 0 0 6px;
       font-size: 20px;
@@ -125,6 +139,10 @@
 <body>
   <div id="map"></div>
 
+  <button id="toggle-panel" class="toggle-panel" type="button" aria-expanded="true">
+    Esconder lista
+  </button>
+
   <main class="panel">
     <h1>Wally</h1>
     <p id="status" class="status">Carregando dispositivos...</p>
@@ -160,6 +178,8 @@
     const devicesEl = document.getElementById("devices");
     const refreshButton = document.getElementById("refresh");
     const fitButton = document.getElementById("fit");
+    const panelEl = document.querySelector(".panel");
+    const togglePanelButton = document.getElementById("toggle-panel");
     const markers = new Map();
 
     function displayName(device) {
@@ -295,6 +315,12 @@
 
     refreshButton.addEventListener("click", refresh);
     fitButton.addEventListener("click", fitAll);
+    togglePanelButton.addEventListener("click", () => {
+      const isHidden = panelEl.classList.toggle("hidden");
+      togglePanelButton.textContent = isHidden ? "Mostrar lista" : "Esconder lista";
+      togglePanelButton.setAttribute("aria-expanded", String(!isHidden));
+      setTimeout(() => map.invalidateSize(), 100);
+    });
 
     window.addEventListener("resize", () => map.invalidateSize());
     setTimeout(() => map.invalidateSize(), 250);
