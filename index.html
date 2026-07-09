@@ -110,6 +110,16 @@
       line-height: 1.35;
       overflow-wrap: anywhere;
     }
+
+    .device .fresh {
+      color: #0f7b45;
+      font-weight: 700;
+    }
+
+    .device .stale {
+      color: #a35b00;
+      font-weight: 700;
+    }
   </style>
 </head>
 <body>
@@ -164,6 +174,21 @@
       }).format(new Date(value));
     }
 
+    function ageText(value) {
+      if (!value) return "sem horario";
+      const minutes = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 60000));
+      if (minutes < 2) return "visto agora";
+      if (minutes < 60) return `visto ha ${minutes} min`;
+      const hours = Math.round(minutes / 60);
+      if (hours < 48) return `visto ha ${hours} h`;
+      return `visto ha ${Math.round(hours / 24)} dias`;
+    }
+
+    function isFresh(value) {
+      if (!value) return false;
+      return Date.now() - new Date(value).getTime() <= 2 * REFRESH_MS;
+    }
+
     function latestByDevice(rows) {
       const byDevice = new Map();
       for (const row of rows) {
@@ -178,7 +203,7 @@
       const params = new URLSearchParams({
         select: "device_id,device_name,latitude,longitude,accuracy,recorded_at,provider",
         order: "recorded_at.desc",
-        limit: "500"
+        limit: "5000"
       });
 
       const response = await fetch(`${SUPABASE_URL}/locations?${params}`, {
@@ -213,6 +238,7 @@
           <strong>${name}</strong><br>
           ${device.latitude}, ${device.longitude}<br>
           Precisao: ${device.accuracy ?? "-"}m<br>
+          Provedor: ${device.provider || "-"}<br>
           Horario: ${formatDate(device.recorded_at)}
         `;
 
@@ -227,10 +253,13 @@
         const item = document.createElement("button");
         item.type = "button";
         item.className = "device";
+        const freshnessClass = isFresh(device.recorded_at) ? "fresh" : "stale";
         item.innerHTML = `
           <strong>${name}</strong>
+          <span class="${freshnessClass}">${ageText(device.recorded_at)}</span>
           <span>${device.device_id}</span>
           <span>${device.latitude}, ${device.longitude}</span>
+          <span>Precisao: ${device.accuracy ?? "-"}m | ${device.provider || "-"}</span>
           <span>${formatDate(device.recorded_at)}</span>
         `;
         item.addEventListener("click", () => {
