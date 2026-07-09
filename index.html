@@ -29,6 +29,74 @@
       background: #eef2f4;
     }
 
+    body.locked #map,
+    body.locked .panel,
+    body.locked .toggle-panel {
+      display: none;
+    }
+
+    .auth {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background:
+        linear-gradient(160deg, rgba(6, 56, 69, 0.96), rgba(15, 111, 115, 0.94)),
+        #063845;
+    }
+
+    body.locked .auth {
+      display: flex;
+    }
+
+    .auth-card {
+      width: min(420px, 100%);
+      background: #f8fcfa;
+      border: 1px solid rgba(255, 255, 255, 0.36);
+      border-radius: 8px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+      padding: 22px;
+    }
+
+    .auth-card h1 {
+      margin-bottom: 8px;
+    }
+
+    .auth-card p {
+      margin: 0 0 16px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .auth-card label {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 12px;
+      font-size: 14px;
+      color: var(--text);
+    }
+
+    .auth-card input {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0 10px;
+      font-size: 16px;
+      background: white;
+      color: var(--text);
+    }
+
+    .auth-error {
+      min-height: 20px;
+      margin: 0 0 12px;
+      color: #b42318;
+      font-size: 14px;
+    }
+
     #map {
       position: fixed;
       inset: 0;
@@ -140,6 +208,23 @@
 <body>
   <div id="map"></div>
 
+  <section id="auth" class="auth" aria-live="polite">
+    <form id="auth-form" class="auth-card">
+      <h1>Monitor de seguranca</h1>
+      <p id="auth-help">Digite a senha para acessar o mapa.</p>
+      <label>
+        Senha
+        <input id="auth-password" type="password" autocomplete="current-password">
+      </label>
+      <label id="auth-confirm-row">
+        Confirmar senha
+        <input id="auth-confirm" type="password" autocomplete="new-password">
+      </label>
+      <div id="auth-error" class="auth-error"></div>
+      <button id="auth-submit" type="submit">Entrar</button>
+    </form>
+  </section>
+
   <button id="toggle-panel" class="toggle-panel" type="button" aria-expanded="true">
     Esconder lista
   </button>
@@ -151,6 +236,7 @@
       <button id="refresh">Atualizar</button>
       <button id="fit" class="secondary">Ver todos</button>
       <button id="toggle-inactive" class="secondary">Mostrar inativos</button>
+      <button id="lock" class="secondary">Bloquear</button>
     </div>
     <section id="devices" class="device-list"></section>
   </main>
@@ -163,6 +249,9 @@
     const SUPABASE_KEY = "sb_publishable_nFCVFlLrzUu_jwBpgwEiEg_BAVe3Zlf";
     const REFRESH_MS = 30000;
     const ACTIVE_WINDOW_MS = 15 * 60 * 1000;
+    const AUTH_HASH_KEY = "wally_web_password_hash";
+    const AUTH_SALT_KEY = "wally_web_password_salt";
+    const AUTH_UNLOCKED_KEY = "wally_web_unlocked";
 
     if (!window.L) {
       document.getElementById("status").textContent =
@@ -182,10 +271,19 @@
     const refreshButton = document.getElementById("refresh");
     const fitButton = document.getElementById("fit");
     const toggleInactiveButton = document.getElementById("toggle-inactive");
+    const lockButton = document.getElementById("lock");
     const panelEl = document.querySelector(".panel");
     const togglePanelButton = document.getElementById("toggle-panel");
+    const authForm = document.getElementById("auth-form");
+    const authHelp = document.getElementById("auth-help");
+    const authPassword = document.getElementById("auth-password");
+    const authConfirm = document.getElementById("auth-confirm");
+    const authConfirmRow = document.getElementById("auth-confirm-row");
+    const authSubmit = document.getElementById("auth-submit");
+    const authError = document.getElementById("auth-error");
     const markers = new Map();
     let showInactive = false;
+    let refreshTimer = null;
 
     function displayName(device) {
       return device.device_name || device.device_id.slice(0, 8);
@@ -335,6 +433,65 @@
       }
     }
 
+    function hasPassword() {
+      return Boolean(localStorage.getItem(AUTH_HASH_KEY) && localStorage.getItem(AUTH_SALT_KEY));
+    }
+
+    function configureAuthScreen() {
+      const setupMode = !hasPassword();
+      authHelp.textContent = setupMode
+        ? "Crie uma senha para proteger este navegador."
+        : "Digite a senha para acessar o mapa.";
+      authConfirmRow.style.display = setupMode ? "grid" : "none";
+      authSubmit.textContent = setupMode ? "Salvar senha" : "Entrar";
+      authPassword.value = "";
+      authConfirm.value = "";
+      authError.textContent = "";
+      setTimeout(() => authPassword.focus(), 50);
+    }
+
+    function lock() {
+      sessionStorage.removeItem(AUTH_UNLOCKED_KEY);
+      document.body.classList.add("locked");
+      configureAuthScreen();
+      if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+      }
+    }
+
+    function unlock() {
+      sessionStorage.setItem(AUTH_UNLOCKED_KEY, "true");
+      document.body.classList.remove("locked");
+      setTimeout(() => map.invalidateSize(), 100);
+      refresh();
+      if (!refreshTimer) refreshTimer = setInterval(refresh, REFRESH_MS);
+    }
+
+    function randomSalt() {
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      return btoa(String.fromCharCode(...bytes));
+    }
+
+    async function hashPassword(password, salt) {
+      const data = new TextEncoder().encode(`${salt}:${password}`);
+      const digest = await crypto.subtle.digest("SHA-256", data);
+      return btoa(String.fromCharCode(...new Uint8Array(digest)));
+    }
+
+    async function savePassword(password) {
+      const salt = randomSalt();
+      localStorage.setItem(AUTH_SALT_KEY, salt);
+      localStorage.setItem(AUTH_HASH_KEY, await hashPassword(password, salt));
+    }
+
+    async function verifyPassword(password) {
+      const salt = localStorage.getItem(AUTH_SALT_KEY);
+      const savedHash = localStorage.getItem(AUTH_HASH_KEY);
+      if (!salt || !savedHash) return false;
+      return await hashPassword(password, salt) === savedHash;
+    }
+
     refreshButton.addEventListener("click", refresh);
     fitButton.addEventListener("click", fitAll);
     toggleInactiveButton.addEventListener("click", () => {
@@ -348,11 +505,42 @@
       togglePanelButton.setAttribute("aria-expanded", String(!isHidden));
       setTimeout(() => map.invalidateSize(), 100);
     });
+    lockButton.addEventListener("click", lock);
+    authForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const password = authPassword.value;
+      const confirmation = authConfirm.value;
+      authError.textContent = "";
+
+      if (password.length < 4) {
+        authError.textContent = "Use pelo menos 4 caracteres.";
+        return;
+      }
+
+      if (!hasPassword()) {
+        if (password !== confirmation) {
+          authError.textContent = "As senhas nao conferem.";
+          return;
+        }
+        await savePassword(password);
+        unlock();
+        return;
+      }
+
+      if (await verifyPassword(password)) {
+        unlock();
+      } else {
+        authError.textContent = "Senha incorreta.";
+      }
+    });
 
     window.addEventListener("resize", () => map.invalidateSize());
     setTimeout(() => map.invalidateSize(), 250);
-    refresh();
-    setInterval(refresh, REFRESH_MS);
+    if (sessionStorage.getItem(AUTH_UNLOCKED_KEY) === "true") {
+      unlock();
+    } else {
+      lock();
+    }
   </script>
 </body>
 </html>
